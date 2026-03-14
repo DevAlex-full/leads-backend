@@ -19,7 +19,7 @@ app.use(express.json({ limit: '1mb' }))
 
 const generalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100, standardHeaders: true, legacyHeaders: false })
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20, message: { success: false, error: 'Muitas tentativas. Aguarde 15 minutos.' }, standardHeaders: true, legacyHeaders: false })
-const scrapeLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20, message: { success: false, error: 'Muitas requisicoes. Aguarde 15 minutos.' }, standardHeaders: true, legacyHeaders: false })
+const scrapeLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 500, message: { success: false, error: 'Muitas requisicoes. Aguarde 15 minutos.' }, standardHeaders: true, legacyHeaders: false })
 
 app.use(generalLimiter)
 

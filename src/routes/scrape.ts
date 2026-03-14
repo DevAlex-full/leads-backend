@@ -3,41 +3,31 @@ import { v4 as uuid } from 'uuid'
 import { validateScrapeRequest } from '../middlewares/validation'
 import { createJob, getJob, cancelJob } from '../services/jobStore'
 import { runScrapeJob } from '../services/scrapeOrchestrator'
+import { getUserLeadStats } from '../services/leadStore'
 import { generateMarkdown, generateCsv } from '../services/exporters'
 import { ScrapeRequest } from '../lib/types'
 
 const router = Router()
 
 // POST /api/scrape/start
-// Inicia um job de scraping — retorna jobId imediatamente
 router.post('/start', validateScrapeRequest, (req: Request, res: Response) => {
   const jobId = uuid()
   const request = req.body as ScrapeRequest
+  const userId = req.user!.userId
 
   createJob(jobId)
 
-  // Executa o scraping em background (não bloqueia a resposta)
   setImmediate(() => {
-    runScrapeJob(jobId, request).catch(() => {
-      // Erros já são tratados dentro do runScrapeJob
-    })
+    runScrapeJob(jobId, { ...request, userId }).catch(() => {})
   })
 
-  res.status(202).json({
-    success: true,
-    data: { jobId },
-  })
+  res.status(202).json({ success: true, data: { jobId } })
 })
 
 // GET /api/scrape/status/:jobId
-// Retorna status, progresso e logs (sem os leads para economizar banda)
 router.get('/status/:jobId', (req: Request, res: Response) => {
   const job = getJob(req.params.jobId)
-
-  if (!job) {
-    res.status(404).json({ success: false, error: 'Job não encontrado.' })
-    return
-  }
+  if (!job) { res.status(404).json({ success: false, error: 'Job nao encontrado.' }); return }
 
   res.json({
     success: true,
@@ -56,20 +46,12 @@ router.get('/status/:jobId', (req: Request, res: Response) => {
 })
 
 // GET /api/scrape/results/:jobId
-// Retorna os leads completos (apenas quando status = done)
 router.get('/results/:jobId', (req: Request, res: Response) => {
   const job = getJob(req.params.jobId)
-
-  if (!job) {
-    res.status(404).json({ success: false, error: 'Job não encontrado.' })
-    return
-  }
+  if (!job) { res.status(404).json({ success: false, error: 'Job nao encontrado.' }); return }
 
   if (job.status !== 'done') {
-    res.status(400).json({
-      success: false,
-      error: `Job ainda não concluído. Status atual: ${job.status}`,
-    })
+    res.status(400).json({ success: false, error: `Job ainda nao concluido. Status: ${job.status}` })
     return
   }
 
@@ -78,25 +60,30 @@ router.get('/results/:jobId', (req: Request, res: Response) => {
     data: {
       leads: job.leads,
       total: job.leads.length,
-      bySource: countBySource(job.leads),
-      byPriority: countByPriority(job.leads),
+      bySource: countByField(job.leads, 'source'),
+      byPriority: { high: job.leads.filter((l) => l.priority === 'high').length, normal: job.leads.filter((l) => l.priority === 'normal').length },
     },
   })
 })
 
-// GET /api/scrape/download/:jobId?format=md|csv
-// Gera e retorna o arquivo para download
+// GET /api/scrape/stats — total acumulado do usuário
+router.get('/stats', async (req: Request, res: Response) => {
+  const userId = req.user!.userId
+  try {
+    const stats = await getUserLeadStats(userId)
+    res.json({ success: true, data: stats })
+  } catch {
+    res.status(500).json({ success: false, error: 'Erro ao buscar estatisticas.' })
+  }
+})
+
+// GET /api/scrape/download/:jobId
 router.get('/download/:jobId', (req: Request, res: Response) => {
   const job = getJob(req.params.jobId)
   const format = (req.query.format as string) || 'md'
 
-  if (!job) {
-    res.status(404).json({ success: false, error: 'Job não encontrado.' })
-    return
-  }
-
-  if (job.status !== 'done' || job.leads.length === 0) {
-    res.status(400).json({ success: false, error: 'Sem leads disponíveis para download.' })
+  if (!job || job.status !== 'done' || job.leads.length === 0) {
+    res.status(400).json({ success: false, error: 'Sem leads disponiveis.' })
     return
   }
 
@@ -108,7 +95,7 @@ router.get('/download/:jobId', (req: Request, res: Response) => {
     const csv = generateCsv(job.leads)
     res.setHeader('Content-Type', 'text/csv; charset=utf-8')
     res.setHeader('Content-Disposition', `attachment; filename="leads_${safeNiche}_${today}.csv"`)
-    res.send('\uFEFF' + csv) // BOM para UTF-8 no Excel
+    res.send('\uFEFF' + csv)
     return
   }
 
@@ -121,30 +108,16 @@ router.get('/download/:jobId', (req: Request, res: Response) => {
 // DELETE /api/scrape/cancel/:jobId
 router.delete('/cancel/:jobId', (req: Request, res: Response) => {
   const cancelled = cancelJob(req.params.jobId)
-
-  if (!cancelled) {
-    res.status(400).json({ success: false, error: 'Job não encontrado ou já finalizado.' })
-    return
-  }
-
-  res.json({ success: true, message: 'Job cancelado com sucesso.' })
+  if (!cancelled) { res.status(400).json({ success: false, error: 'Job nao encontrado ou ja finalizado.' }); return }
+  res.json({ success: true, message: 'Job cancelado.' })
 })
 
-// Helpers
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function countBySource(leads: any[]) {
-  return leads.reduce((acc: Record<string, number>, l) => {
-    acc[l.source] = (acc[l.source] || 0) + 1
+function countByField(items: any[], field: string): Record<string, number> {
+  return items.reduce((acc: Record<string, number>, item) => {
+    acc[item[field]] = (acc[item[field]] || 0) + 1
     return acc
   }, {})
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function countByPriority(leads: any[]) {
-  return {
-    high: leads.filter((l) => l.priority === 'high').length,
-    normal: leads.filter((l) => l.priority === 'normal').length,
-  }
 }
 
 export default router

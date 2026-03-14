@@ -1,4 +1,5 @@
 export type Source = 'google_maps' | 'instagram' | 'linkedin' | 'facebook'
+export type SiteFilter = 'all' | 'without_site' | 'with_site'
 
 export interface Lead {
   name: string
@@ -12,10 +13,12 @@ export interface Lead {
   instagram: string
   linkedin: string
   facebook: string
+  whatsapp: string
   rating: string
   reviews: string
+  category: string
   source: Source
-  priority: 'high' | 'normal' // high = sem site (lead mais quente)
+  priority: 'high' | 'normal'
   scrapedAt: string
 }
 
@@ -44,6 +47,7 @@ export interface ScrapeRequest {
   cities: string[]
   perCity: number
   sources: Source[]
+  siteFilter: SiteFilter
 }
 
 export interface ApifyRunResponse {
@@ -51,10 +55,7 @@ export interface ApifyRunResponse {
     id: string
     status: string
     defaultDatasetId: string
-    stats?: {
-      requestsFinished: number
-      requestsFailed: number
-    }
+    stats?: { requestsFinished: number; requestsFailed: number }
   }
 }
 
@@ -63,8 +64,6 @@ export interface ApifyRunStatus {
     id: string
     status: 'READY' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'ABORTED' | 'TIMED-OUT'
     defaultDatasetId: string
-    stats?: {
-      requestsFinished: number
-    }
+    stats?: { requestsFinished: number }
   }
 }
