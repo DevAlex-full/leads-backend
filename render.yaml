@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: leads-backend
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+      - key: ALLOWED_ORIGIN
+        sync: false  # Preencher manualmente no painel do Render
