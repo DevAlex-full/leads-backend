@@ -6,6 +6,7 @@ import { parseLinkedInItems } from './parsers/linkedin'
 import { parseFacebookItems } from './parsers/facebook'
 import { updateJob, addLog, getJob } from './jobStore'
 import { filterNewLeads, saveLeadFingerprints } from './leadStore'
+import { saveSession } from './sessionStore'
 
 interface ActorConfig {
   actorId: string
@@ -30,7 +31,6 @@ const ACTOR_CONFIGS: Record<Source, ActorConfig> = {
     parse: parseGoogleMapsItems,
     label: 'Google Maps',
   },
-
   instagram: {
     actorId: 'apify/instagram-hashtag-scraper',
     buildInput: (niche) => ({
@@ -42,8 +42,6 @@ const ACTOR_CONFIGS: Record<Source, ActorConfig> = {
     parse: parseInstagramItems,
     label: 'Instagram',
   },
-
-  // LinkedIn — usando actor público mais estável
   linkedin: {
     actorId: 'scrap3r/linkedin-companies-search',
     buildInput: (niche, cities) => ({
@@ -54,8 +52,6 @@ const ACTOR_CONFIGS: Record<Source, ActorConfig> = {
     parse: parseLinkedInItems,
     label: 'LinkedIn',
   },
-
-  // Facebook — sem proxy residencial (não disponível no plano free)
   facebook: {
     actorId: 'apify/facebook-pages-scraper',
     buildInput: (niche, cities) => ({
@@ -79,7 +75,6 @@ function buildInstagramHashtags(niche: string): string[] {
     .filter((v, i, a) => a.indexOf(v) === i).slice(0, 8)
 }
 
-// Filtra leads pelas cidades selecionadas
 function filterByCities(leads: Lead[], cities: string[]): Lead[] {
   if (!cities.length) return leads
   const citySet = new Set(cities.map((c) => c.toLowerCase()))
@@ -90,14 +85,12 @@ function filterByCities(leads: Lead[], cities: string[]): Lead[] {
   })
 }
 
-// Aplica filtro de site (com/sem/todos)
 function applySiteFilter(leads: Lead[], siteFilter: SiteFilter): Lead[] {
   if (siteFilter === 'without_site') return leads.filter((l) => !l.website)
   if (siteFilter === 'with_site') return leads.filter((l) => Boolean(l.website))
   return leads
 }
 
-// Deduplicação interna do job
 function deduplicateLeads(leads: Lead[]): Lead[] {
   const seen = new Set<string>()
   return leads.filter((l) => {
@@ -126,7 +119,7 @@ export async function runScrapeJob(jobId: string, request: ScrapeRequest & { use
       if (!current || current.status === 'cancelled') { cancelSignal.cancelled = true; break }
 
       const config = ACTOR_CONFIGS[source]
-      const baseProgress = (completedSources / totalSources) * 85
+      const baseProgress = (completedSources / totalSources) * 82
 
       addLog(jobId, `Iniciando ${config.label}...`, 'info')
       updateJob(jobId, { progress: baseProgress + 2, progressLabel: `Iniciando ${config.label}...` })
@@ -150,7 +143,7 @@ export async function runScrapeJob(jobId: string, request: ScrapeRequest & { use
       try {
         datasetId = await waitForRun(apiKey, runId, (status, requestsFinished) => {
           pollCount++
-          const pct = Math.min(baseProgress + 5 + pollCount * 2, baseProgress + 78)
+          const pct = Math.min(baseProgress + 5 + pollCount * 2, baseProgress + 75)
           updateJob(jobId, { progress: pct, progressLabel: `${config.label}: ${status} (${requestsFinished} itens)...` })
           addLog(jobId, `${config.label} status: ${status} — ${requestsFinished} processados`, 'info')
         }, cancelSignal)
@@ -164,8 +157,6 @@ export async function runScrapeJob(jobId: string, request: ScrapeRequest & { use
       addLog(jobId, `Baixando resultados ${config.label}...`, 'info')
       const items = await getDatasetItems(apiKey, datasetId)
       const parsed = config.parse(items, niche)
-
-      // Filtra por cidade (Google Maps e Facebook têm dados de localização)
       const filteredByCities = (source === 'instagram' || source === 'linkedin')
         ? parsed
         : filterByCities(parsed, cities)
@@ -174,7 +165,7 @@ export async function runScrapeJob(jobId: string, request: ScrapeRequest & { use
       completedSources++
       addLog(jobId, `${config.label}: ${filteredByCities.length} leads encontrados`, 'success')
       updateJob(jobId, {
-        progress: (completedSources / totalSources) * 85,
+        progress: (completedSources / totalSources) * 82,
         progressLabel: `${config.label} concluido (${filteredByCities.length} leads)`,
       })
     }
@@ -182,22 +173,22 @@ export async function runScrapeJob(jobId: string, request: ScrapeRequest & { use
     // 1. Deduplicação interna
     const dedupedInJob = deduplicateLeads(allLeads)
 
-    // 2. Aplica filtro de site (com/sem/todos)
+    // 2. Filtro de site
     const filteredBySite = applySiteFilter(dedupedInJob, siteFilter)
     if (siteFilter !== 'all') {
       const label = siteFilter === 'without_site' ? 'sem site' : 'com site'
-      addLog(jobId, `Filtro aplicado: apenas leads ${label} (${filteredBySite.length} de ${dedupedInJob.length})`, 'info')
+      addLog(jobId, `Filtro: apenas leads ${label} (${filteredBySite.length} de ${dedupedInJob.length})`, 'info')
     }
 
     // 3. Deduplicação cross-sessão
-    updateJob(jobId, { progress: 90, progressLabel: 'Verificando leads novos...' })
+    updateJob(jobId, { progress: 86, progressLabel: 'Verificando leads novos...' })
     const newLeads = await filterNewLeads(userId, filteredBySite)
     const removedCount = filteredBySite.length - newLeads.length
     if (removedCount > 0) {
-      addLog(jobId, `${removedCount} leads ja vistos em sessoes anteriores — removidos`, 'info')
+      addLog(jobId, `${removedCount} leads ja vistos — removidos`, 'info')
     }
 
-    // 4. Ordena: sem site primeiro, depois por avaliação
+    // 4. Ordenação
     const sorted = newLeads.sort((a, b) => {
       if (a.priority === 'high' && b.priority !== 'high') return -1
       if (a.priority !== 'high' && b.priority === 'high') return 1
@@ -207,6 +198,13 @@ export async function runScrapeJob(jobId: string, request: ScrapeRequest & { use
     // 5. Salva fingerprints
     if (sorted.length > 0) {
       await saveLeadFingerprints(userId, sorted)
+    }
+
+    // 6. Salva sessão completa no Supabase (para histórico e re-download)
+    updateJob(jobId, { progress: 94, progressLabel: 'Salvando sessao no historico...' })
+    const sessionId = await saveSession(userId, niche, cities, sources, siteFilter, sorted)
+    if (sessionId) {
+      addLog(jobId, `Sessao salva no historico (id: ${sessionId.slice(0, 8)}...)`, 'success')
     }
 
     addLog(jobId, `Total: ${sorted.length} leads novos encontrados`, 'success')
