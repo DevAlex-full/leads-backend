@@ -4,7 +4,7 @@ services:
     env: node
     region: oregon
     plan: free
-    buildCommand: npm install && npm run build && pip install -r scripts/requirements.txt
+    buildCommand: npm install --include=dev && npm run build && pip install -r scripts/requirements.txt
     startCommand: node dist/index.js
     envVars:
       - key: NODE_ENV

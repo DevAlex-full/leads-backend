@@ -157,7 +157,8 @@ function extractFromHtml(html: string): Partial<ExtractedData> {
   if (wa) result.whatsapp = wa[0]
   else if (result.phones!.length) result.whatsapp = buildWhatsApp(result.phones![0])
 
-  $('a[href]').each((_: number, el: cheerio.Element) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  $('a[href]').each((_: number, el: any) => {
     const href = $(el).attr('href') || ''
     if (!result.instagram && href.includes('instagram.com')) result.instagram = cleanInstagram(href)
     if (!result.facebook && href.includes('facebook.com') && !href.includes('share')) result.facebook = href.replace(/\/$/, '')
