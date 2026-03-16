@@ -1,5 +1,6 @@
 export type Source = 'google_maps' | 'instagram' | 'linkedin' | 'facebook'
 export type SiteFilter = 'all' | 'without_site' | 'with_site'
+export type Priority = 'high' | 'normal'
 
 export interface Lead {
   name: string
@@ -18,8 +19,14 @@ export interface Lead {
   reviews: string
   category: string
   source: Source
-  priority: 'high' | 'normal'
+  priority: Priority
   scrapedAt: string
+  // Campos extras do enriquecimento
+  cnpj?: string
+  razaoSocial?: string
+  bairro?: string
+  cep?: string
+  enriched?: boolean
 }
 
 export interface ScrapeJob {
@@ -42,12 +49,12 @@ export interface LogEntry {
 
 export interface ScrapeRequest {
   apiKey: string
-  niche: string
-  customSearchTerm?: string
+  niches: string[]
   cities: string[]
   perCity: number
   sources: Source[]
   siteFilter: SiteFilter
+  requiredFields?: string[]   // campos obrigatórios: email, instagram, whatsapp, phone, etc.
 }
 
 export interface ApifyRunResponse {

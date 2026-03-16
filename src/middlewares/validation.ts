@@ -6,10 +6,11 @@ export const scrapeSchema = z.object({
     .string({ required_error: 'apiKey e obrigatorio' })
     .min(10, 'apiKey invalida')
     .startsWith('apify_api_', 'apiKey deve comecar com apify_api_'),
-  niche: z
-    .string({ required_error: 'niche e obrigatorio' })
-    .min(2, 'niche deve ter ao menos 2 caracteres')
-    .max(80, 'niche muito longo'),
+  // Aceita niches (array) — 1 a 3 nichos
+  niches: z
+    .array(z.string().min(2).max(80))
+    .min(1, 'Selecione ao menos 1 nicho')
+    .max(3, 'Maximo de 3 nichos'),
   cities: z
     .array(z.string().min(2))
     .min(1, 'Selecione ao menos uma cidade')
@@ -23,6 +24,9 @@ export const scrapeSchema = z.object({
   siteFilter: z
     .enum(['all', 'without_site', 'with_site'])
     .default('all'),
+  requiredFields: z
+    .array(z.string())
+    .optional(),
 })
 
 export function validateScrapeRequest(req: Request, res: Response, next: NextFunction): void {

@@ -9,6 +9,7 @@ import authRouter from './routes/auth'
 import adminRouter from './routes/admin'
 import healthRouter from './routes/health'
 import historyRouter from './routes/history'
+import enrichRouter from './routes/enrich'
 import { seedAdminIfNeeded } from './services/authService'
 
 const app = express()
@@ -28,6 +29,7 @@ app.use('/health', healthRouter)
 app.use('/api/auth', authLimiter, authRouter)
 app.use('/api/scrape', requireAuth, scrapeLimiter, scrapeRouter)
 app.use('/api/history', requireAuth, historyRouter)
+app.use('/api/enrich', requireAuth, enrichRouter)
 app.use('/api/admin', adminRouter)
 
 app.use((_req, res) => { res.status(404).json({ success: false, error: 'Rota nao encontrada.' }) })
