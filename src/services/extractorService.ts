@@ -251,7 +251,43 @@ export async function extractFromSearch(name: string, city: string): Promise<Par
   return result
 }
 
-// Etapa 4 removida — sem adivinhação de Instagram
+// ── ESTRATÉGIA 4: Busca direcionada de Instagram por nome + cidade ──────
+
+export async function findInstagramByName(name: string, city: string): Promise<string | null> {
+  // Busca específica: "nome da empresa" cidade instagram
+  const queries = [
+    `"${name}" instagram.com`,
+    `"${name}" ${city} instagram`,
+    `site:instagram.com "${name}" ${city}`,
+  ]
+
+  for (const query of queries) {
+    try {
+      const { search } = await import('duck-duck-scrape')
+      const ddg = await search(query, { locale: 'br-pt', safeSearch: 0 as 0 })
+      for (const r of (ddg.results || []).slice(0, 5)) {
+        const url = r.url || ''
+        if (url.includes('instagram.com')) {
+          const m = url.match(/instagram\.com\/([a-zA-Z0-9._]{2,30})\/? /)
+          if (m) {
+            const handle = m[1]
+            const skip = ['p', 'reel', 'explore', 'stories', 'tv', 'accounts']
+            if (!skip.includes(handle) && !/^[0-9]+$/.test(handle)) {
+              return `https://www.instagram.com/${handle}`
+            }
+          }
+        }
+        // Tenta extrair do snippet
+        const snippet = r.description || ''
+        const snipMatch = snippet.match(/instagram\.com\/([a-zA-Z0-9._]{2,30})/)
+        if (snipMatch && !['p','reel','explore'].includes(snipMatch[1])) {
+          return `https://www.instagram.com/${snipMatch[1]}`
+        }
+      }
+    } catch { /* continua */ }
+  }
+  return null
+}
 
 // ── CASCATA PRINCIPAL ────────────────────────────────────────────
 
@@ -276,6 +312,12 @@ export async function enrichLeadData(
   // Etapa 3: DuckDuckGo
   if (!isComplete(result)) merge(result, await extractFromSearch(name, city))
 
+
+  // ── Etapa 4: Busca Instagram por nome+cidade se ainda não tiver ────
+  if (!result.instagram) {
+    const ig = await findInstagramByName(name, city)
+    if (ig) result.instagram = ig
+  }
 
   // WhatsApp fallback
   if (!result.whatsapp && result.phones.length > 0) {

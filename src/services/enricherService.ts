@@ -5,7 +5,7 @@
  */
 
 import { supabase } from '../lib/supabase'
-import { enrichLeadData } from './extractorService'
+import { enrichLeadData, findInstagramByName } from './extractorService'
 import { Lead } from '../lib/types'
 
 const MAX_CONCURRENT = parseInt(process.env.ENRICHER_CONCURRENT || '5')
@@ -139,7 +139,15 @@ async function runEnrichSession(jobId: string, sessionId: string, userId: string
       try {
         const cnpj = (lead as Lead & { cnpj?: string }).cnpj || null
         const data = await enrichLeadData(lead.name, lead.city, lead.website, cnpj)
-        const updated = applyEnrichment(lead, data)
+        let updated = applyEnrichment(lead, data)
+
+        // Busca Instagram específica para leads do Google Maps sem @
+        if (!updated.instagram && lead.source === 'google_maps') {
+          const ig = await findInstagramByName(lead.name, lead.city)
+          if (ig) {
+            updated = { ...updated, instagram: ig }
+          }
+        }
         leads[idx] = updated
 
         // Verifica se houve melhoria real
