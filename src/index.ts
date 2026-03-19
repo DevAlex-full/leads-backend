@@ -13,6 +13,7 @@ import enrichRouter from './routes/enrich'
 import { seedAdminIfNeeded } from './services/authService'
 
 const app = express()
+app.set('trust proxy', 1) // Render fica atrás de proxy
 const PORT = process.env.PORT || 3001
 
 app.use(helmet())
