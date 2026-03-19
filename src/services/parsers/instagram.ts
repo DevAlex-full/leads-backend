@@ -276,6 +276,23 @@ function isValidUsername(raw: string): boolean {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function parseInstagramItems(items: any[], niche: string, targetCities?: string[]): Lead[] {
+  // Log diagnóstico — mostra TODOS os campos do primeiro item para ajustar o parser
+  if (items.length > 0) {
+    const sample = items[0]
+    const allKeys = Object.keys(sample)
+    console.log(`[instagram parser] Campos disponíveis: ${allKeys.join(', ')}`)
+    // Campos candidatos a ter a bio/cidade
+    const bioKeys = allKeys.filter(k => /bio|desc|about|caption|text|location|city|place|address|owner|profile/i.test(k))
+    bioKeys.forEach(k => {
+      const val = sample[k]
+      if (val && typeof val !== 'object') {
+        console.log(`[instagram parser] ${k} = "${String(val).slice(0, 120)}"`)
+      } else if (val && typeof val === 'object') {
+        console.log(`[instagram parser] ${k} (objeto) = ${JSON.stringify(val).slice(0, 200)}`)
+      }
+    })
+  }
+
   return items.map(item => {
 
     // Username

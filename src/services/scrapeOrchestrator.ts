@@ -339,15 +339,13 @@ export async function runScrapeJob(
       // Filtra por cidade para todas as fontes
       let filteredByCities: Lead[]
       if (source === 'instagram') {
-        // Instagram: MANTER todos os leads — cidade é extraída da bio/posts e pode ser enriquecida depois
-        // Separar leads COM cidade compatível dos SEM cidade para priorização
+        // Instagram: actor busca por hashtag nacional — retorna perfis de todo o Brasil
+        // REGRA: só aceitar leads com cidade CONFIRMADA E compatível com a seleção
+        // Sem cidade na bio/posts = descartado (não temos como saber de onde é)
         const withCity = filterByCities(parsed, cities)
-        const withoutCity = parsed.filter(l => !l.city && !l.state)
-        const wrongCity = parsed.filter(l => (l.city || l.state) && !withCity.includes(l))
-
-        // Inclui: cidade certa + sem cidade (não sabemos ainda) — exclui: cidade errada confirmada
-        filteredByCities = [...withCity, ...withoutCity]
-        addLog(jobId, `Instagram: ${parsed.length} perfis → ${withCity.length} cidade certa + ${withoutCity.length} sem cidade (${wrongCity.length} descartados por cidade errada)`, 'info')
+        const discarded = parsed.length - withCity.length
+        filteredByCities = withCity
+        addLog(jobId, `Instagram: ${parsed.length} perfis → ${withCity.length} com cidade confirmada nas cidades selecionadas (${discarded} descartados sem cidade ou cidade errada)`, 'info')
       } else {
         filteredByCities = filterByCities(parsed, cities)
         const removed = parsed.length - filteredByCities.length
