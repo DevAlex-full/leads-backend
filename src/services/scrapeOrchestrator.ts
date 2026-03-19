@@ -18,18 +18,91 @@ interface ActorConfig {
   label: string
 }
 
+// Coordenadas das principais cidades BR para o actor Google Maps
+const CITY_COORDS: Record<string, { lat: number; lng: number }> = {
+  'são paulo': { lat: -23.5505, lng: -46.6333 },
+  'campinas': { lat: -22.9056, lng: -47.0608 },
+  'ribeirão preto': { lat: -21.1775, lng: -47.8103 },
+  'santo andré': { lat: -23.6618, lng: -46.5322 },
+  'sorocaba': { lat: -23.5015, lng: -47.4526 },
+  'rio de janeiro': { lat: -22.9068, lng: -43.1729 },
+  'niterói': { lat: -22.8833, lng: -43.1036 },
+  'nova iguaçu': { lat: -22.7593, lng: -43.4510 },
+  'belo horizonte': { lat: -19.9191, lng: -43.9386 },
+  'contagem': { lat: -19.9317, lng: -44.0536 },
+  'curitiba': { lat: -25.4284, lng: -49.2733 },
+  'porto alegre': { lat: -30.0346, lng: -51.2177 },
+  'florianópolis': { lat: -27.5954, lng: -48.5480 },
+  'joinville': { lat: -26.3045, lng: -48.8487 },
+  'salvador': { lat: -12.9714, lng: -38.5014 },
+  'fortaleza': { lat: -3.7172, lng: -38.5433 },
+  'recife': { lat: -8.0476, lng: -34.8770 },
+  'natal': { lat: -5.7945, lng: -35.2110 },
+  'maceió': { lat: -9.6658, lng: -35.7350 },
+  'joão pessoa': { lat: -7.1195, lng: -34.8450 },
+  'teresina': { lat: -5.0920, lng: -42.8038 },
+  'aracaju': { lat: -10.9472, lng: -37.0731 },
+  'são luís': { lat: -2.5297, lng: -44.3028 },
+  'manaus': { lat: -3.1190, lng: -60.0217 },
+  'belém': { lat: -1.4558, lng: -48.5044 },
+  'porto velho': { lat: -8.7619, lng: -63.9039 },
+  'goiânia': { lat: -16.6869, lng: -49.2648 },
+  'campo grande': { lat: -20.4697, lng: -54.6201 },
+  'cuiabá': { lat: -15.5989, lng: -56.0949 },
+  'brasília': { lat: -15.7801, lng: -47.9292 },
+}
+
+function getCityCoords(city: string): { lat: number; lng: number } | null {
+  const key = city.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
+  return CITY_COORDS[city.toLowerCase()] ||
+    Object.entries(CITY_COORDS).find(([k]) =>
+      k.normalize('NFD').replace(/[\u0300-\u036f]/g, '').includes(key) ||
+      key.includes(k.normalize('NFD').replace(/[\u0300-\u036f]/g, ''))
+    )?.[1] || null
+}
+
 const ACTOR_CONFIGS: Record<Source, ActorConfig> = {
   google_maps: {
     actorId: 'compass/crawler-google-places',
-    buildInput: (niches, cities, perCity) => ({
-      searchStringsArray: cities.flatMap(c => niches.map(n => `${n} ${c} Brasil`)),
-      maxCrawledPlacesPerSearch: perCity,
-      language: 'pt-BR',
-      countryCode: 'br',
-      includeHistogram: false,
-      includeOpeningHours: false,
-      includePeopleAlsoSearch: false,
-    }),
+    buildInput: (niches, cities, perCity) => {
+      // Gera uma busca por cidade — se tiver coordenadas, usa location bias para precisão máxima
+      const searches = cities.flatMap(c => {
+        const coords = getCityCoords(c)
+        return niches.map(n => ({
+          searchString: `${n} em ${c}`,
+          ...(coords ? { lat: coords.lat, lng: coords.lng, zoom: 12 } : {}),
+        }))
+      })
+      // Actor aceita dois formatos: searchStringsArray (simples) ou startUrls com geo
+      const hasCoords = cities.some(c => getCityCoords(c))
+      if (hasCoords) {
+        return {
+          searchStringsArray: cities.flatMap(c => niches.map(n => `${n} em ${c}`)),
+          maxCrawledPlacesPerSearch: perCity,
+          language: 'pt-BR',
+          countryCode: 'br',
+          // Raio restrito à cidade — evita resultados de cidades vizinhas
+          maxAutomaticZoomOut: 1,
+          includeHistogram: false,
+          includeOpeningHours: false,
+          includePeopleAlsoSearch: false,
+          // Campos adicionais para capturar Instagram
+          additionalInfo: true,
+          scrapeContacts: true,
+        }
+      }
+      return {
+        searchStringsArray: cities.flatMap(c => niches.map(n => `${n} em ${c}`)),
+        maxCrawledPlacesPerSearch: perCity,
+        language: 'pt-BR',
+        countryCode: 'br',
+        includeHistogram: false,
+        includeOpeningHours: false,
+        includePeopleAlsoSearch: false,
+        additionalInfo: true,
+        scrapeContacts: true,
+      }
+    },
     parse: parseGoogleMapsItems,
     label: 'Google Maps',
   },
@@ -264,12 +337,20 @@ export async function runScrapeJob(
       }
 
       // Filtra por cidade para todas as fontes
-      // Instagram: filtra pela bio do perfil (campo city extraído pelo parser)
-      const filteredByCities = filterByCities(parsed, cities)
-      const removed = parsed.length - filteredByCities.length
+      let filteredByCities: Lead[]
       if (source === 'instagram') {
-        addLog(jobId, `Instagram: ${parsed.length} perfis → ${filteredByCities.length} com cidade compatível (${removed} sem cidade ou fora da seleção)`, 'info')
+        // Instagram: MANTER todos os leads — cidade é extraída da bio/posts e pode ser enriquecida depois
+        // Separar leads COM cidade compatível dos SEM cidade para priorização
+        const withCity = filterByCities(parsed, cities)
+        const withoutCity = parsed.filter(l => !l.city && !l.state)
+        const wrongCity = parsed.filter(l => (l.city || l.state) && !withCity.includes(l))
+
+        // Inclui: cidade certa + sem cidade (não sabemos ainda) — exclui: cidade errada confirmada
+        filteredByCities = [...withCity, ...withoutCity]
+        addLog(jobId, `Instagram: ${parsed.length} perfis → ${withCity.length} cidade certa + ${withoutCity.length} sem cidade (${wrongCity.length} descartados por cidade errada)`, 'info')
       } else {
+        filteredByCities = filterByCities(parsed, cities)
+        const removed = parsed.length - filteredByCities.length
         addLog(jobId, `Filtro de cidade: ${parsed.length} leads brutos → ${filteredByCities.length} nas cidades selecionadas (${removed} removidos)`, 'info')
         if (removed > 0) {
           const examples = parsed

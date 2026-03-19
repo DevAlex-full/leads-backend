@@ -141,12 +141,10 @@ async function runEnrichSession(jobId: string, sessionId: string, userId: string
         const data = await enrichLeadData(lead.name, lead.city, lead.website, cnpj)
         let updated = applyEnrichment(lead, data)
 
-        // Busca Instagram específica para leads do Google Maps sem @
-        if (!updated.instagram && lead.source === 'google_maps') {
+        // Busca Instagram para qualquer lead sem @ (Maps, Instagram sem cidade, etc.)
+        if (!updated.instagram && lead.name && !lead.name.startsWith('@')) {
           const ig = await findInstagramByName(lead.name, lead.city)
-          if (ig) {
-            updated = { ...updated, instagram: ig }
-          }
+          if (ig) updated = { ...updated, instagram: ig }
         }
         leads[idx] = updated
 
