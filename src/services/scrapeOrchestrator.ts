@@ -340,12 +340,19 @@ export async function runScrapeJob(
       let filteredByCities: Lead[]
       if (source === 'instagram') {
         // Instagram: actor busca por hashtag nacional — retorna perfis de todo o Brasil
-        // REGRA: só aceitar leads com cidade CONFIRMADA E compatível com a seleção
-        // Sem cidade na bio/posts = descartado (não temos como saber de onde é)
-        const withCity = filterByCities(parsed, cities)
-        const discarded = parsed.length - withCity.length
-        filteredByCities = withCity
-        addLog(jobId, `Instagram: ${parsed.length} perfis → ${withCity.length} com cidade confirmada nas cidades selecionadas (${discarded} descartados sem cidade ou cidade errada)`, 'info')
+        // Estratégia: aceita cidade certa + leads sem cidade que tenham @ válido relacionado ao nicho
+        // Descarta apenas leads com cidade CONFIRMADA ERRADA
+        const withCorrectCity = filterByCities(parsed, cities)
+        const withWrongCity   = parsed.filter(l => (l.city || l.state) && !withCorrectCity.includes(l))
+        const withoutCity     = parsed.filter(l => !l.city && !l.state)
+        // Leads sem cidade: aceita se username tem palavras relacionadas ao nicho
+        const nicheWords = niches.flatMap(n => n.toLowerCase().split(/\s+/))
+        const relevantWithoutCity = withoutCity.filter(l => {
+          const handle = (l.name || '').toLowerCase().replace('@', '')
+          return nicheWords.some(w => w.length > 3 && handle.includes(w))
+        })
+        filteredByCities = [...withCorrectCity, ...relevantWithoutCity]
+        addLog(jobId, `Instagram: ${parsed.length} perfis → ${withCorrectCity.length} cidade certa + ${relevantWithoutCity.length} sem cidade com nicho no @username (${withWrongCity.length} cidade errada descartados)`, 'info')
       } else {
         filteredByCities = filterByCities(parsed, cities)
         const removed = parsed.length - filteredByCities.length
@@ -394,7 +401,7 @@ export async function runScrapeJob(
         const pythonLeads = await runPythonScripts({
           niches,
           cities: citiesForPython,
-          sources: ['maps', 'cnpj', 'google'],
+          sources: ['cnpj'],  // 'google' desabilitado no Render (DuckDuckGo timeout)
           maxPerCity: Math.min(perCity, 30),
           googlePlacesKey: process.env.GOOGLE_PLACES_KEY,
         })
