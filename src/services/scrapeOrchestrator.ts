@@ -374,13 +374,21 @@ export async function runScrapeJob(
       addLog(jobId, 'Iniciando busca Python (Google Places + CNPJ + DuckDuckGo)...', 'info')
       updateJob(jobId, { progress: 83, progressLabel: 'Scripts Python rodando...' })
 
-      // Mapeia cidades para formato do Python
-      const citiesForPython = cities.map(c => {
-        const parts = c.split(/[\s,]+/)
-        const state = parts.length > 1 ? parts[parts.length - 1] : ''
-        const name  = parts.slice(0, -1).join(' ') || c
-        return { name, state }
-      })
+      // Mapeia cidades para formato do Python — mantém nome completo + busca UF no mapa
+      const CITY_TO_UF: Record<string, string> = {
+        'São Paulo':'SP','Campinas':'SP','Ribeirão Preto':'SP','Santo André':'SP',
+        'Sorocaba':'SP','Rio de Janeiro':'RJ','Niterói':'RJ','Nova Iguaçu':'RJ',
+        'Belo Horizonte':'MG','Contagem':'MG','Curitiba':'PR','Porto Alegre':'RS',
+        'Florianópolis':'SC','Joinville':'SC','Salvador':'BA','Fortaleza':'CE',
+        'Recife':'PE','Natal':'RN','Maceió':'AL','João Pessoa':'PB',
+        'Teresina':'PI','Aracaju':'SE','São Luís':'MA','Manaus':'AM',
+        'Belém':'PA','Porto Velho':'RO','Goiânia':'GO','Campo Grande':'MS',
+        'Cuiabá':'MT','Brasília':'DF',
+      }
+      const citiesForPython = cities.map(c => ({
+        name: c,
+        state: CITY_TO_UF[c] || '',
+      }))
 
       try {
         const pythonLeads = await runPythonScripts({

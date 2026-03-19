@@ -39,6 +39,27 @@ function findInstagram(item: Record<string, unknown>): string {
     }
   }
 
+  // 2b. webResults / resultsFromWeb — "Resultados da Web" no Maps (contém Instagram)
+  const webResults = (item.webResults as unknown[]) ||
+    (item.resultsFromWeb as unknown[]) ||
+    ((item.additionalInfo as Record<string,unknown>)?.webResults as unknown[]) || []
+  for (const r of webResults) {
+    const url = clean((r as Record<string,unknown>)?.url || (r as Record<string,unknown>)?.link || '')
+    if (url.includes('instagram.com')) {
+      const ig = extractInstagramFromUrl(url)
+      if (ig) return ig
+    }
+    // Às vezes o Instagram está no snippet de texto
+    const snippet = clean((r as Record<string,unknown>)?.snippet || (r as Record<string,unknown>)?.description || '')
+    if (snippet.includes('instagram.com')) {
+      const m = snippet.match(/instagram\.com\/([a-zA-Z0-9._]{2,30})/)
+      if (m) {
+        const ig = extractInstagramFromUrl(`https://www.instagram.com/${m[1]}`)
+        if (ig) return ig
+      }
+    }
+  }
+
   // 3. additionalInfo — onde o actor guarda dados extras das abas do Maps
   const info = (item.additionalInfo as Record<string, unknown>) || {}
   const infoStr = JSON.stringify(info)
