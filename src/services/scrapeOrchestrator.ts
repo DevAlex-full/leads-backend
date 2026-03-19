@@ -14,7 +14,7 @@ interface ActorConfig {
   actorId: string
   buildInput: (niches: string[], cities: string[], perCity: number) => object
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  parse: (items: any[], niche: string) => Lead[]
+  parse: (items: any[], niche: string, cities?: string[]) => Lead[]
   label: string
 }
 
@@ -251,7 +251,7 @@ export async function runScrapeJob(
       // Parseia para cada nicho e combina — garante que cada lead tem seu nicho correto
       let parsed: Lead[] = []
       if (niches.length === 1) {
-        parsed = config.parse(items, niches[0])
+        parsed = config.parse(items, niches[0], cities)
       } else {
         // Para múltiplos nichos, associa cada lead ao nicho mais provável pelo nome
         parsed = items.map(item => {
@@ -259,24 +259,19 @@ export async function runScrapeJob(
           const matchedNiche = niches.find(n =>
             name.includes(n.toLowerCase().split(' ')[0])
           ) || niches[0]
-          return config.parse([item], matchedNiche)[0]
+          return config.parse([item], matchedNiche, cities)[0]
         }).filter(Boolean) as Lead[]
       }
 
-      // Instagram e LinkedIn não têm cidade padronizada nos perfis
-      // O usuário escreve o que quiser no perfil — não é possível filtrar por cidade
-      let filteredByCities: Lead[]
-      if (source === 'instagram' || source === 'linkedin') {
-        filteredByCities = parsed
-        if (source === 'instagram') {
-          addLog(jobId, `Instagram: cidade nao filtrada (perfis nao tem cidade padronizada)`, 'info')
-        }
+      // Filtra por cidade para todas as fontes
+      // Instagram: filtra pela bio do perfil (campo city extraído pelo parser)
+      const filteredByCities = filterByCities(parsed, cities)
+      const removed = parsed.length - filteredByCities.length
+      if (source === 'instagram') {
+        addLog(jobId, `Instagram: ${parsed.length} perfis → ${filteredByCities.length} com cidade compatível (${removed} sem cidade ou fora da seleção)`, 'info')
       } else {
-        filteredByCities = filterByCities(parsed, cities)
-        const removed = parsed.length - filteredByCities.length
         addLog(jobId, `Filtro de cidade: ${parsed.length} leads brutos → ${filteredByCities.length} nas cidades selecionadas (${removed} removidos)`, 'info')
-        // Debug: mostrar exemplos de leads removidos
-        if (removed > 0 && removed <= parsed.length) {
+        if (removed > 0) {
           const examples = parsed
             .filter(l => !filteredByCities.includes(l))
             .slice(0, 3)
