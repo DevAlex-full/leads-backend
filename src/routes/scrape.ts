@@ -15,7 +15,7 @@ router.post('/start', validateScrapeRequest, (req: Request, res: Response) => {
   const request = req.body as ScrapeRequest
   const userId = req.user!.userId
 
-  createJob(jobId)
+  createJob(jobId, userId)
 
   setImmediate(() => {
     runScrapeJob(jobId, { ...request, userId }).catch(() => {})
@@ -28,6 +28,7 @@ router.post('/start', validateScrapeRequest, (req: Request, res: Response) => {
 router.get('/status/:jobId', (req: Request, res: Response) => {
   const job = getJob(req.params.jobId)
   if (!job) { res.status(404).json({ success: false, error: 'Job nao encontrado.' }); return }
+  if (job.userId && job.userId !== req.user!.userId) { res.status(404).json({ success: false, error: 'Job nao encontrado.' }); return }
 
   res.json({
     success: true,
@@ -38,7 +39,10 @@ router.get('/status/:jobId', (req: Request, res: Response) => {
       progressLabel: job.progressLabel,
       logs: job.logs,
       leadsCount: job.leads.length,
+      sourceExecutions: job.sourceExecutions,
       error: job.error,
+      errorCode: job.errorCode,
+      warning: job.warning,
       createdAt: job.createdAt,
       finishedAt: job.finishedAt,
     },
@@ -49,6 +53,7 @@ router.get('/status/:jobId', (req: Request, res: Response) => {
 router.get('/results/:jobId', (req: Request, res: Response) => {
   const job = getJob(req.params.jobId)
   if (!job) { res.status(404).json({ success: false, error: 'Job nao encontrado.' }); return }
+  if (job.userId && job.userId !== req.user!.userId) { res.status(404).json({ success: false, error: 'Job nao encontrado.' }); return }
 
   if (job.status !== 'done') {
     res.status(400).json({ success: false, error: `Job ainda nao concluido. Status: ${job.status}` })
@@ -82,6 +87,7 @@ router.get('/download/:jobId', (req: Request, res: Response) => {
   const job = getJob(req.params.jobId)
   const format = (req.query.format as string) || 'md'
 
+  if (job?.userId && job.userId !== req.user!.userId) { res.status(404).json({ success: false, error: 'Job nao encontrado.' }); return }
   if (!job || job.status !== 'done' || job.leads.length === 0) {
     res.status(400).json({ success: false, error: 'Sem leads disponiveis.' })
     return
@@ -107,6 +113,8 @@ router.get('/download/:jobId', (req: Request, res: Response) => {
 
 // DELETE /api/scrape/cancel/:jobId
 router.delete('/cancel/:jobId', (req: Request, res: Response) => {
+  const job = getJob(req.params.jobId)
+  if (job?.userId && job.userId !== req.user!.userId) { res.status(404).json({ success: false, error: 'Job nao encontrado.' }); return }
   const cancelled = cancelJob(req.params.jobId)
   if (!cancelled) { res.status(400).json({ success: false, error: 'Job nao encontrado ou ja finalizado.' }); return }
   res.json({ success: true, message: 'Job cancelado.' })

@@ -29,14 +29,65 @@ export interface Lead {
   enriched?: boolean
 }
 
+export type SourceExecutionStatus =
+  | 'pending'
+  | 'starting'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+
+export type ScrapeErrorCode =
+  | 'APIFY_TOKEN_MISSING'
+  | 'APIFY_TOKEN_INVALID_FORMAT'
+  | 'APIFY_UNAUTHORIZED'
+  | 'APIFY_USAGE_LIMIT_REACHED'
+  | 'APIFY_ACTOR_INPUT_INVALID'
+  | 'APIFY_RUN_FAILED'
+  | 'APIFY_RUN_ABORTED'
+  | 'APIFY_RUN_TIMEOUT'
+  | 'APIFY_DATASET_NOT_FOUND'
+  | 'APIFY_DATASET_EMPTY'
+  | 'APIFY_HTTP_ERROR'
+  | 'SCRAPE_ALL_SOURCES_FAILED'
+  | 'SCRAPE_PARTIAL_SUCCESS'
+  | 'PARSER_RETURNED_ZERO'
+  | 'LOCATION_FILTER_REMOVED_ALL'
+  | 'SITE_FILTER_REMOVED_ALL'
+  | 'REQUIRED_FIELDS_REMOVED_ALL'
+
+// Observabilidade por fonte/execução do Actor — NUNCA deve conter o token da Apify.
+export interface SourceExecution {
+  source: Source
+  actorId: string
+  status: SourceExecutionStatus
+  runId?: string
+  datasetId?: string
+  rawItems: number
+  parsedItems: number
+  afterLocationFilter: number
+  duplicatesInRun: number
+  previouslySeen: number
+  finalItems: number
+  startedAt?: string
+  finishedAt?: string
+  warning?: string
+  errorCode?: ScrapeErrorCode
+  error?: string
+}
+
 export interface ScrapeJob {
   id: string
+  userId?: string
   status: 'pending' | 'running' | 'done' | 'failed' | 'cancelled'
   progress: number
   progressLabel: string
   logs: LogEntry[]
   leads: Lead[]
   error?: string
+  errorCode?: ScrapeErrorCode
+  warning?: string
+  sourceExecutions: SourceExecution[]
   createdAt: string
   finishedAt?: string
 }
@@ -55,6 +106,9 @@ export interface ScrapeRequest {
   sources: Source[]
   siteFilter: SiteFilter
   requiredFields?: string[]   // campos obrigatórios: email, instagram, whatsapp, phone, etc.
+  // Quando true (padrão), leads já vistos em buscas anteriores são mantidos no resultado.
+  // Quando false, são removidos (deduplicação cross-sessão) e contados em previouslySeen.
+  includePreviouslySeen?: boolean
 }
 
 export interface ApifyRunResponse {

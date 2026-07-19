@@ -1,0 +1,45 @@
+[
+  {
+    "title": "Barbearia Exemplo Central",
+    "address": "Rua das Flores, 123 - Centro, Campinas - SP, 13010-000",
+    "city": "Campinas",
+    "state": "São Paulo",
+    "phone": "+55 19 99999-1234",
+    "phoneUnformatted": "+551999991234",
+    "website": "https://barbeariaexemplo.com.br",
+    "totalScore": 4.7,
+    "reviewsCount": 128,
+    "categoryName": "Barbearia",
+    "placeId": "ChIJ_sample_place_id_1",
+    "socialMedia": ["https://www.instagram.com/barbeariaexemplo"]
+  },
+  {
+    "title": "Barbearia Sem Endereco Estruturado",
+    "address": "Av. Norte-Sul, 456, Campinas - SP",
+    "city": "",
+    "state": "",
+    "phone": "(19) 3333-4444",
+    "website": "",
+    "totalScore": 4.2,
+    "reviewsCount": 40,
+    "categoryName": "Barbearia",
+    "placeId": "ChIJ_sample_place_id_2"
+  },
+  {
+    "title": "Barbearia Outra Cidade",
+    "address": "Rua Exemplo, 10 - Centro, Sorocaba - SP",
+    "city": "Sorocaba",
+    "state": "SP",
+    "phone": "(15) 3222-1111",
+    "website": "",
+    "totalScore": 4.0,
+    "reviewsCount": 12,
+    "categoryName": "Barbearia",
+    "placeId": "ChIJ_sample_place_id_3"
+  },
+  {
+    "title": "",
+    "address": "Campinas - SP",
+    "phone": ""
+  }
+]

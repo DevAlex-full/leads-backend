@@ -2,8 +2,9 @@ import { ScrapeJob, LogEntry } from '../lib/types'
 
 const jobs = new Map<string, ScrapeJob>()
 
-// Limpa jobs com mais de 2 horas automaticamente
-setInterval(() => {
+// Limpa jobs com mais de 2 horas automaticamente.
+// unref(): não impede o processo (ou o test runner) de encerrar por causa deste timer.
+const cleanupInterval = setInterval(() => {
   const cutoff = Date.now() - 2 * 60 * 60 * 1000
   for (const [id, job] of jobs.entries()) {
     if (new Date(job.createdAt).getTime() < cutoff) {
@@ -11,15 +12,18 @@ setInterval(() => {
     }
   }
 }, 30 * 60 * 1000)
+cleanupInterval.unref()
 
-export function createJob(id: string): ScrapeJob {
+export function createJob(id: string, userId?: string): ScrapeJob {
   const job: ScrapeJob = {
     id,
+    userId,
     status: 'pending',
     progress: 0,
     progressLabel: 'Aguardando início...',
     logs: [],
     leads: [],
+    sourceExecutions: [],
     createdAt: new Date().toISOString(),
   }
   jobs.set(id, job)

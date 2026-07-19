@@ -1,5 +1,5 @@
-import { ScrapeRequest, Lead, Source, SiteFilter } from '../lib/types'
-import { startActor, waitForRun, getDatasetItems } from './apify'
+import { ScrapeRequest, Lead, Source, SiteFilter, SourceExecution, ScrapeErrorCode } from '../lib/types'
+import { startActor, waitForRun, getDatasetItems, ApifyError } from './apify'
 import { parseGoogleMapsItems } from './parsers/googleMaps'
 import { parseInstagramItems } from './parsers/instagram'
 import { parseLinkedInItems } from './parsers/linkedin'
@@ -9,6 +9,20 @@ import { filterNewLeads, saveLeadFingerprints } from './leadStore'
 import { saveSession } from './sessionStore'
 import { startEnrichJob } from './enricherService'
 import { runPythonScripts, isPythonConfigured } from './pythonRunner'
+import { sanitizeError } from '../lib/sanitize'
+
+// Fontes secundárias — desabilitadas por padrão até terem parser/testes/observabilidade
+// validados da mesma forma que o Google Maps (Fase 11 do plano de correção).
+// Definir SOURCE_<NOME>_ENABLED=true no Render para reabilitar uma fonte específica.
+function isSourceEnabled(source: Source): boolean {
+  const flags: Record<Source, string> = {
+    google_maps: process.env.SOURCE_GOOGLE_MAPS_ENABLED ?? 'true',
+    instagram: process.env.SOURCE_INSTAGRAM_ENABLED ?? 'true',
+    linkedin: process.env.SOURCE_LINKEDIN_ENABLED ?? 'true',
+    facebook: process.env.SOURCE_FACEBOOK_ENABLED ?? 'true',
+  }
+  return flags[source] !== 'false'
+}
 
 interface ActorConfig {
   actorId: string
@@ -195,7 +209,7 @@ const CITY_TO_UF: Record<string, string> = {
   'goiania':'go','campo grande':'ms','cuiaba':'mt','brasilia':'df',
 }
 
-function filterByCities(leads: Lead[], cities: string[]): Lead[] {
+export function filterByCities(leads: Lead[], cities: string[]): Lead[] {
   if (!cities.length) return leads
 
   // Prepara estrutura de busca: { cityNorm, uf }
@@ -234,13 +248,13 @@ function filterByCities(leads: Lead[], cities: string[]): Lead[] {
   })
 }
 
-function applySiteFilter(leads: Lead[], siteFilter: SiteFilter): Lead[] {
+export function applySiteFilter(leads: Lead[], siteFilter: SiteFilter): Lead[] {
   if (siteFilter === 'without_site') return leads.filter(l => !l.website)
   if (siteFilter === 'with_site') return leads.filter(l => Boolean(l.website))
   return leads
 }
 
-function deduplicateLeads(leads: Lead[]): Lead[] {
+export function deduplicateLeads(leads: Lead[]): Lead[] {
   const seen = new Set<string>()
   return leads.filter(l => {
     const phone = l.phone?.replace(/\D/g, '').trim()
@@ -258,19 +272,41 @@ export async function runScrapeJob(
   request: ScrapeRequest & { userId: string }
 ): Promise<void> {
   const { apiKey, niches, cities, perCity, sources, siteFilter, userId, requiredFields } = request
+  // Padrão true: preserva o comportamento visível ao usuário (mostra tudo),
+  // mas SEM apagar resultados silenciosamente quando a mesma busca já rodou antes.
+  const includePreviouslySeen = request.includePreviouslySeen !== false
   const cancelSignal = { cancelled: false }
   const allLeads: Lead[] = []
-  const totalSources = sources.length
+  const activeSources = sources.filter(isSourceEnabled)
+  const totalSources = activeSources.length
   let completedSources = 0
 
-  updateJob(jobId, { status: 'running', progress: 2, progressLabel: 'Iniciando...' })
+  const sourceExecutions: SourceExecution[] = sources.map(source => ({
+    source,
+    actorId: ACTOR_CONFIGS[source].actorId,
+    status: isSourceEnabled(source) ? 'pending' : 'cancelled',
+    rawItems: 0,
+    parsedItems: 0,
+    afterLocationFilter: 0,
+    duplicatesInRun: 0,
+    previouslySeen: 0,
+    finalItems: 0,
+    ...(isSourceEnabled(source) ? {} : { warning: 'Fonte desabilitada via feature flag (SOURCE_*_ENABLED=false).' }),
+  }))
+  updateJob(jobId, { status: 'running', progress: 2, progressLabel: 'Iniciando...', sourceExecutions })
 
   const nicheLabel = niches.join(', ')
   addLog(jobId, `Nichos: ${nicheLabel}`, 'info')
 
+  function updateExec(source: Source, patch: Partial<SourceExecution>) {
+    const job = getJob(jobId)
+    if (!job) return
+    const next = job.sourceExecutions.map(se => se.source === source ? { ...se, ...patch } : se)
+    updateJob(jobId, { sourceExecutions: next })
+  }
 
   try {
-    for (const source of sources) {
+    for (const source of activeSources) {
       const current = getJob(jobId)
       if (!current || current.status === 'cancelled') { cancelSignal.cancelled = true; break }
 
@@ -279,6 +315,7 @@ export async function runScrapeJob(
 
       addLog(jobId, `Iniciando ${config.label}...`, 'info')
       updateJob(jobId, { progress: baseProgress + 2, progressLabel: `Iniciando ${config.label}...` })
+      updateExec(source, { status: 'starting', startedAt: new Date().toISOString() })
 
       let runId: string
       try {
@@ -289,14 +326,15 @@ export async function runScrapeJob(
         )
         runId = result.runId
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Erro desconhecido'
-        addLog(jobId, `ERRO ao iniciar ${config.label}: ${msg}`, 'error')
-        addLog(jobId, `Pulando ${config.label} e continuando...`, 'info')
+        const { message, code } = describeError(err)
+        addLog(jobId, `ERRO ao iniciar ${config.label}: ${message}`, 'error')
+        updateExec(source, { status: 'failed', errorCode: code, error: message, finishedAt: new Date().toISOString() })
         completedSources++
         continue
       }
 
       addLog(jobId, `Run ${config.label} iniciado: ${runId}`, 'info')
+      updateExec(source, { status: 'running', runId })
 
       let pollCount = 0
       let datasetId: string
@@ -312,14 +350,32 @@ export async function runScrapeJob(
           cancelSignal
         )
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Erro desconhecido'
-        addLog(jobId, `ERRO no run ${config.label}: ${msg}`, 'error')
+        const { message, code } = describeError(err)
+        addLog(jobId, `ERRO no run ${config.label}: ${message}`, 'error')
+        updateExec(source, { status: 'failed', errorCode: code, error: message, finishedAt: new Date().toISOString() })
         completedSources++
         continue
       }
 
       addLog(jobId, `Baixando resultados ${config.label}...`, 'info')
-      const items = await getDatasetItems(apiKey, datasetId)
+      let items: Record<string, unknown>[]
+      try {
+        items = await getDatasetItems(apiKey, datasetId)
+      } catch (err) {
+        const { message, code } = describeError(err)
+        addLog(jobId, `ERRO ao baixar dataset ${config.label}: ${message}`, 'error')
+        updateExec(source, { status: 'failed', datasetId, errorCode: code, error: message, finishedAt: new Date().toISOString() })
+        completedSources++
+        continue
+      }
+
+      const rawItems = items.length
+      addLog(jobId, `${config.label}: dataset retornou ${rawItems} itens brutos (runId=${runId}, datasetId=${datasetId})`, 'info')
+      if (rawItems === 0) {
+        addLog(jobId, `${config.label}: Actor concluiu com sucesso, mas o dataset retornou 0 itens.`, 'info')
+      } else if (process.env.NODE_ENV !== 'production') {
+        addLog(jobId, `${config.label}: campos do primeiro item: ${Object.keys(items[0]).join(', ')}`, 'info')
+      }
 
       // Parseia para cada nicho e combina — garante que cada lead tem seu nicho correto
       let parsed: Lead[] = []
@@ -334,6 +390,10 @@ export async function runScrapeJob(
           ) || niches[0]
           return config.parse([item], matchedNiche, cities)[0]
         }).filter(Boolean) as Lead[]
+      }
+      const parsedItems = parsed.length
+      if (rawItems > 0 && parsedItems === 0) {
+        addLog(jobId, `${config.label}: dataset tinha ${rawItems} itens, mas o parser não reconheceu nenhum (schema inesperado?).`, 'error')
       }
 
       // Filtra por cidade para todas as fontes
@@ -366,6 +426,9 @@ export async function runScrapeJob(
           if (examples) addLog(jobId, `Removidos ex: ${examples}`, 'info')
         }
       }
+      if (parsedItems > 0 && filteredByCities.length === 0) {
+        addLog(jobId, `${config.label}: o filtro de localização removeu 100% dos ${parsedItems} leads parseados.`, 'error')
+      }
 
       allLeads.push(...filteredByCities)
       completedSources++
@@ -373,6 +436,18 @@ export async function runScrapeJob(
       updateJob(jobId, {
         progress: (completedSources / totalSources) * 82,
         progressLabel: `${config.label} concluido (${filteredByCities.length} leads)`,
+      })
+      updateExec(source, {
+        status: 'succeeded',
+        datasetId,
+        rawItems,
+        parsedItems,
+        afterLocationFilter: filteredByCities.length,
+        finalItems: filteredByCities.length,
+        finishedAt: new Date().toISOString(),
+        ...(rawItems === 0 ? { warning: 'Dataset vazio (0 itens retornados pelo Actor).' } : {}),
+        ...(rawItems > 0 && parsedItems === 0 ? { warning: 'Parser não reconheceu o formato dos itens do dataset.' } : {}),
+        ...(parsedItems > 0 && filteredByCities.length === 0 ? { warning: 'Filtro de localização removeu todos os leads.' } : {}),
       })
     }
 
@@ -414,30 +489,87 @@ export async function runScrapeJob(
       }
     }
 
-    // 1. Deduplicação interna
+    // ── Erro técnico não pode virar silenciosamente "0 leads" ──────────────
+    // Se havia fontes ativas e TODAS falharam (nenhuma succeeded), o job é
+    // um erro técnico, não um resultado vazio legítimo.
+    const finalExecs = getJob(jobId)?.sourceExecutions ?? sourceExecutions
+    const consideredExecs = finalExecs.filter(se => activeSources.includes(se.source))
+    const allFailed = totalSources > 0 && consideredExecs.length > 0 && consideredExecs.every(se => se.status === 'failed')
+    const someFailed = consideredExecs.some(se => se.status === 'failed')
+
+    if (allFailed && !cancelSignal.cancelled) {
+      const firstError = consideredExecs.find(se => se.error)?.error || 'Todas as fontes falharam.'
+      addLog(jobId, `ERRO: todas as fontes falharam — ${firstError}`, 'error')
+      updateJob(jobId, {
+        status: 'failed',
+        errorCode: 'SCRAPE_ALL_SOURCES_FAILED',
+        error: firstError,
+        progress: 100,
+        progressLabel: 'Falhou: nenhuma fonte retornou resultado.',
+        finishedAt: new Date().toISOString(),
+      })
+      return
+    }
+
+    // 1. Deduplicação interna (mesma execução)
     const dedupedInJob = deduplicateLeads(allLeads)
+    const duplicatesInRun = allLeads.length - dedupedInJob.length
 
     // 2. Filtro de site
     const filteredBySite = applySiteFilter(dedupedInJob, siteFilter)
     if (siteFilter !== 'all') {
       const label = siteFilter === 'without_site' ? 'sem site' : 'com site'
       addLog(jobId, `Filtro: apenas leads ${label} (${filteredBySite.length} de ${dedupedInJob.length})`, 'info')
+      if (dedupedInJob.length > 0 && filteredBySite.length === 0) {
+        addLog(jobId, `SITE_FILTER_REMOVED_ALL: o filtro de site removeu 100% dos leads.`, 'error')
+      }
     }
 
-    // 3. Deduplicação cross-sessão
-    updateJob(jobId, { progress: 86, progressLabel: 'Verificando leads novos...' })
-    const newLeads = await filterNewLeads(userId, filteredBySite)
-    const removedCount = filteredBySite.length - newLeads.length
-    if (removedCount > 0) addLog(jobId, `${removedCount} leads ja vistos — removidos`, 'info')
+    // 3. Deduplicação cross-sessão (leads já vistos em buscas anteriores)
+    let sorted: (Lead & { previouslySeen?: boolean })[]
+    let previouslySeenCount = 0
+    if (includePreviouslySeen) {
+      // Padrão: NÃO remove — apenas marca. Isso evita que reexecutar a mesma
+      // busca (ex.: teste repetido) pareça retornar "0 leads" quando na
+      // verdade os leads já foram vistos antes.
+      updateJob(jobId, { progress: 86, progressLabel: 'Marcando leads já vistos...' })
+      const newOnly = await filterNewLeads(userId, filteredBySite)
+      // filterNewLeads preserva as referências originais dos objetos (apenas filtra o array),
+      // então identidade de objeto é uma checagem de "é novo?" robusta e sem reconstrução de fingerprint.
+      const newSet = new Set(newOnly)
+      previouslySeenCount = filteredBySite.length - newOnly.length
+      sorted = filteredBySite.map(l => ({
+        ...l,
+        previouslySeen: !newSet.has(l),
+      }))
+      if (previouslySeenCount > 0) {
+        addLog(jobId, `${previouslySeenCount} leads já vistos em buscas anteriores (mantidos — includePreviouslySeen=true)`, 'info')
+      }
+    } else {
+      updateJob(jobId, { progress: 86, progressLabel: 'Verificando leads novos...' })
+      const newLeads = await filterNewLeads(userId, filteredBySite)
+      previouslySeenCount = filteredBySite.length - newLeads.length
+      if (previouslySeenCount > 0) addLog(jobId, `${previouslySeenCount} leads ja vistos — removidos (includePreviouslySeen=false)`, 'info')
+      sorted = newLeads
+    }
 
     // 4. Ordenação
-    const sorted = newLeads.sort((a, b) => {
+    sorted = sorted.sort((a, b) => {
       if (a.priority === 'high' && b.priority !== 'high') return -1
       if (a.priority !== 'high' && b.priority === 'high') return 1
       return parseFloat(b.rating || '0') - parseFloat(a.rating || '0')
     })
 
-    // 5. Salva fingerprints
+    // Reflete os contadores finais em cada SourceExecution (proporcional — a atribuição
+    // exata por fonte não é trivial pós-merge, então usamos os totais agregados do job).
+    updateJob(jobId, {
+      sourceExecutions: (getJob(jobId)?.sourceExecutions ?? sourceExecutions).map(se => ({
+        ...se,
+        duplicatesInRun: se.status === 'succeeded' ? Math.round(duplicatesInRun / Math.max(consideredExecs.filter(s => s.status === 'succeeded').length, 1)) : se.duplicatesInRun,
+      })),
+    })
+
+    // 5. Salva fingerprints (mesmo quando includePreviouslySeen=true, para futuras buscas)
     if (sorted.length > 0) await saveLeadFingerprints(userId, sorted)
 
     // 6. Salva sessão completa
@@ -446,23 +578,44 @@ export async function runScrapeJob(
 
     if (sessionId) {
       addLog(jobId, `Sessao salva no historico (id: ${sessionId.slice(0, 8)}...)`, 'success')
-      addLog(jobId, 'Iniciando enriquecimento automatico dos leads...', 'info')
-      startEnrichJob(sessionId, userId)
+      // Enriquecimento automático desligado por padrão (Fase 12) — falhas de
+      // enriquecimento não podem impactar a busca principal, e o custo/tempo
+      // extra deve ser uma decisão explícita do usuário via endpoint manual.
+      if (process.env.ENRICH_AUTO_ENABLED === 'true') {
+        addLog(jobId, 'Iniciando enriquecimento automatico dos leads...', 'info')
+        startEnrichJob(sessionId, userId)
+      }
     }
 
-    addLog(jobId, `Total: ${sorted.length} leads novos encontrados`, 'success')
+    const warning = someFailed
+      ? `Execução parcial: ${consideredExecs.filter(se => se.status === 'failed').map(se => ACTOR_CONFIGS[se.source].label).join(', ')} falharam.`
+      : (sorted.length === 0 && allLeads.length > 0)
+        ? 'Todas as fontes rodaram com sucesso, mas os filtros removeram 100% dos leads.'
+        : undefined
+
+    addLog(jobId, `Total: ${sorted.length} leads (raw=${allLeads.length}, duplicatesInRun=${duplicatesInRun}, previouslySeen=${previouslySeenCount})`, 'success')
+    if (warning) addLog(jobId, `AVISO: ${warning}`, 'error')
 
     const wasCancelled = getJob(jobId)?.status === 'cancelled'
     updateJob(jobId, {
       status: wasCancelled ? 'cancelled' : 'done',
       progress: 100,
-      progressLabel: wasCancelled ? 'Cancelado.' : `Concluido! ${sorted.length} leads novos encontrados.`,
+      progressLabel: wasCancelled ? 'Cancelado.' : `Concluido! ${sorted.length} leads encontrados.`,
       leads: sorted,
+      warning,
+      errorCode: someFailed ? 'SCRAPE_PARTIAL_SUCCESS' : undefined,
       finishedAt: new Date().toISOString(),
     })
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Erro desconhecido'
+    const { message, code } = describeError(err)
     addLog(jobId, `ERRO: ${message}`, 'error')
-    updateJob(jobId, { status: 'failed', error: message, finishedAt: new Date().toISOString() })
+    updateJob(jobId, { status: 'failed', errorCode: code, error: message, finishedAt: new Date().toISOString() })
   }
+}
+
+/** Converte qualquer erro capturado em uma mensagem e errorCode sanitizados e seguros para o público. */
+function describeError(err: unknown): { message: string; code: ScrapeErrorCode } {
+  if (err instanceof ApifyError) return { message: err.message, code: err.code }
+  const message = sanitizeError(err)
+  return { message, code: 'APIFY_HTTP_ERROR' }
 }
