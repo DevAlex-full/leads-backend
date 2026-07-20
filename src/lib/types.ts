@@ -76,6 +76,16 @@ export interface SourceExecution {
   error?: string
 }
 
+export interface ScrapeStats {
+  rawItems: number
+  parsedItems: number
+  invalidItems: number
+  duplicateItems: number
+  filteredByLocation: number
+  filteredByWebsite: number
+  finalItems: number
+}
+
 export interface ScrapeJob {
   id: string
   userId?: string
@@ -88,6 +98,10 @@ export interface ScrapeJob {
   errorCode?: ScrapeErrorCode
   warning?: string
   sourceExecutions: SourceExecution[]
+  // Fase 2: observabilidade agregada do pipeline — opcionais para não quebrar
+  // nenhum consumidor existente do tipo ScrapeJob.
+  stats?: ScrapeStats
+  diagnostics?: string[]
   createdAt: string
   finishedAt?: string
 }

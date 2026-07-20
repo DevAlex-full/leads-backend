@@ -40,6 +40,8 @@ router.get('/status/:jobId', (req: Request, res: Response) => {
       logs: job.logs,
       leadsCount: job.leads.length,
       sourceExecutions: job.sourceExecutions,
+      stats: job.stats,
+      diagnostics: job.diagnostics,
       error: job.error,
       errorCode: job.errorCode,
       warning: job.warning,
@@ -67,6 +69,8 @@ router.get('/results/:jobId', (req: Request, res: Response) => {
       total: job.leads.length,
       bySource: countByField(job.leads, 'source'),
       byPriority: { high: job.leads.filter((l) => l.priority === 'high').length, normal: job.leads.filter((l) => l.priority === 'normal').length },
+      stats: job.stats,
+      diagnostics: job.diagnostics,
     },
   })
 })

@@ -10,6 +10,7 @@ import { saveSession } from './sessionStore'
 import { startEnrichJob } from './enricherService'
 import { runPythonScripts, isPythonConfigured } from './pythonRunner'
 import { sanitizeError } from '../lib/sanitize'
+import { buildStats, buildDiagnostics } from './diagnostics'
 
 // Fontes secundárias — desabilitadas por padrão até terem parser/testes/observabilidade
 // validados da mesma forma que o Google Maps (Fase 11 do plano de correção).
@@ -277,6 +278,7 @@ export async function runScrapeJob(
   const includePreviouslySeen = request.includePreviouslySeen !== false
   const cancelSignal = { cancelled: false }
   const allLeads: Lead[] = []
+  let pythonLeadsCount = 0
   const activeSources = sources.filter(isSourceEnabled)
   const totalSources = activeSources.length
   let completedSources = 0
@@ -482,6 +484,7 @@ export async function runScrapeJob(
         })
         if (pythonLeads.length > 0) {
           allLeads.push(...pythonLeads)
+          pythonLeadsCount = pythonLeads.length
           addLog(jobId, `Python: +${pythonLeads.length} leads adicionais encontrados`, 'success')
         }
       } catch (err) {
@@ -500,10 +503,19 @@ export async function runScrapeJob(
     if (allFailed && !cancelSignal.cancelled) {
       const firstError = consideredExecs.find(se => se.error)?.error || 'Todas as fontes falharam.'
       addLog(jobId, `ERRO: todas as fontes falharam — ${firstError}`, 'error')
+      const failStats = buildStats({
+        sourceExecutions: finalExecs,
+        extraRawItems: pythonLeadsCount,
+        duplicateItems: 0,
+        filteredByWebsite: 0,
+        finalItems: 0,
+      })
       updateJob(jobId, {
         status: 'failed',
         errorCode: 'SCRAPE_ALL_SOURCES_FAILED',
         error: firstError,
+        stats: failStats,
+        diagnostics: buildDiagnostics(finalExecs, failStats, siteFilter),
         progress: 100,
         progressLabel: 'Falhou: nenhuma fonte retornou resultado.',
         finishedAt: new Date().toISOString(),
@@ -517,6 +529,7 @@ export async function runScrapeJob(
 
     // 2. Filtro de site
     const filteredBySite = applySiteFilter(dedupedInJob, siteFilter)
+    const filteredByWebsite = dedupedInJob.length - filteredBySite.length
     if (siteFilter !== 'all') {
       const label = siteFilter === 'without_site' ? 'sem site' : 'com site'
       addLog(jobId, `Filtro: apenas leads ${label} (${filteredBySite.length} de ${dedupedInJob.length})`, 'info')
@@ -596,6 +609,16 @@ export async function runScrapeJob(
     addLog(jobId, `Total: ${sorted.length} leads (raw=${allLeads.length}, duplicatesInRun=${duplicatesInRun}, previouslySeen=${previouslySeenCount})`, 'success')
     if (warning) addLog(jobId, `AVISO: ${warning}`, 'error')
 
+    // ── Fase 2: estatísticas agregadas + diagnósticos legíveis ──────────────
+    const stats = buildStats({
+      sourceExecutions: getJob(jobId)?.sourceExecutions ?? sourceExecutions,
+      extraRawItems: pythonLeadsCount,
+      duplicateItems: duplicatesInRun,
+      filteredByWebsite,
+      finalItems: sorted.length,
+    })
+    const diagnostics = buildDiagnostics(getJob(jobId)?.sourceExecutions ?? sourceExecutions, stats, siteFilter)
+
     const wasCancelled = getJob(jobId)?.status === 'cancelled'
     updateJob(jobId, {
       status: wasCancelled ? 'cancelled' : 'done',
@@ -603,6 +626,8 @@ export async function runScrapeJob(
       progressLabel: wasCancelled ? 'Cancelado.' : `Concluido! ${sorted.length} leads encontrados.`,
       leads: sorted,
       warning,
+      stats,
+      diagnostics,
       errorCode: someFailed ? 'SCRAPE_PARTIAL_SUCCESS' : undefined,
       finishedAt: new Date().toISOString(),
     })
